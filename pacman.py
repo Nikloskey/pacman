@@ -68,12 +68,15 @@ class PacmanGame:
         curses.init_pair(8, curses.COLOR_BLUE, curses.COLOR_BLUE)    # Scared Ghost
 
         # Find start position for Pacman and count dots
-        self.pacman_y, self.pacman_x = 23, 13
+        self.pacman_start_y, self.pacman_start_x = 23, 13
+        self.pacman_y, self.pacman_x = self.pacman_start_y, self.pacman_start_x
         self.pacman_dir = curses.KEY_RIGHT
         self.next_dir = curses.KEY_RIGHT
 
         self.score = 0
+        self.lives = 3
         self.total_dots = sum(row.count('.') + row.count('o') for row in self.map)
+        self.scared_timer = 0
 
         # Characters
         self.char_wall = '█'
@@ -81,17 +84,18 @@ class PacmanGame:
         self.char_pellet = '●'
         self.char_pacman = 'C'
 
-        # Ghosts
+        # Ghosts (store start position for resets)
         self.ghosts = [
-            {'y': 11, 'x': 13, 'color': 4, 'char': 'ᗣ', 'dir': curses.KEY_UP},
-            {'y': 14, 'x': 11, 'color': 5, 'char': 'ᗣ', 'dir': curses.KEY_UP},
-            {'y': 14, 'x': 13, 'color': 6, 'char': 'ᗣ', 'dir': curses.KEY_UP},
-            {'y': 14, 'x': 15, 'color': 7, 'char': 'ᗣ', 'dir': curses.KEY_UP},
+            {'y': 11, 'x': 13, 'start_y': 11, 'start_x': 13, 'color': 4, 'char': 'ᗣ', 'dir': curses.KEY_UP, 'scared': False},
+            {'y': 14, 'x': 11, 'start_y': 14, 'start_x': 11, 'color': 5, 'char': 'ᗣ', 'dir': curses.KEY_UP, 'scared': False},
+            {'y': 14, 'x': 13, 'start_y': 14, 'start_x': 13, 'color': 6, 'char': 'ᗣ', 'dir': curses.KEY_UP, 'scared': False},
+            {'y': 14, 'x': 15, 'start_y': 14, 'start_x': 15, 'color': 7, 'char': 'ᗣ', 'dir': curses.KEY_UP, 'scared': False},
         ]
 
         self.running = True
         self.game_over = False
         self.win = False
+        self.frame_count = 0
 
     def draw_map(self):
         for y in range(self.height):
@@ -111,7 +115,8 @@ class PacmanGame:
     def draw_entities(self):
         # Draw ghosts
         for g in self.ghosts:
-            self.stdscr.addstr(g['y'], g['x'] * 2, f" {g['char']}", curses.color_pair(g['color']))
+            color = 8 if g['scared'] else g['color']
+            self.stdscr.addstr(g['y'], g['x'] * 2, f" {g['char']}", curses.color_pair(color))
 
         # Draw pacman
         pac_char = 'C'
@@ -168,7 +173,9 @@ class PacmanGame:
             self.map[self.pacman_y][self.pacman_x] = ' '
             self.score += 50
             self.total_dots -= 1
-            # Power pellet logic could go here
+            self.scared_timer = 50 # About 5 seconds at 10fps
+            for g in self.ghosts:
+                g['scared'] = True
 
         if self.total_dots == 0:
             self.win = True
@@ -176,22 +183,39 @@ class PacmanGame:
 
     def move_ghosts(self):
         for g in self.ghosts:
-            possible_moves = []
-            for d in [curses.KEY_UP, curses.KEY_DOWN, curses.KEY_LEFT, curses.KEY_RIGHT]:
-                dy, dx = 0, 0
-                if d == curses.KEY_UP: dy = -1
-                elif d == curses.KEY_DOWN: dy = 1
-                elif d == curses.KEY_LEFT: dx = -1
-                elif d == curses.KEY_RIGHT: dx = 1
+            if g['scared'] and self.frame_count % 2 == 0:
+                # Scared ghosts move at half speed
+                pass
+            else:
+                possible_moves = []
+                for d in [curses.KEY_UP, curses.KEY_DOWN, curses.KEY_LEFT, curses.KEY_RIGHT]:
+                    dy, dx = 0, 0
+                    if d == curses.KEY_UP: dy = -1
+                    elif d == curses.KEY_DOWN: dy = 1
+                    elif d == curses.KEY_LEFT: dx = -1
+                    elif d == curses.KEY_RIGHT: dx = 1
 
-                ny, nx = g['y'] + dy, g['x'] + dx
+                    ny, nx = g['y'] + dy, g['x'] + dx
 
-                # Tunnel
-                if nx < 0: nx = self.width - 1
-                elif nx >= self.width: nx = 0
+                    # Tunnel
+                    if nx < 0: nx = self.width - 1
+                    elif nx >= self.width: nx = 0
 
-                if self.map[ny][nx] != '#':
-                    # Prevent instant reverse unless stuck
+                    if self.map[ny][nx] != '#':
+                        # Prevent instant reverse unless stuck
+                        reverse_dir = {
+                            curses.KEY_UP: curses.KEY_DOWN,
+                            curses.KEY_DOWN: curses.KEY_UP,
+                            curses.KEY_LEFT: curses.KEY_RIGHT,
+                            curses.KEY_RIGHT: curses.KEY_LEFT
+                        }.get(g['dir'])
+
+                        if d != reverse_dir:
+                            possible_moves.append((d, ny, nx))
+
+                if not possible_moves:
+                    # If stuck, allow reverse
+                    dy, dx = 0, 0
                     reverse_dir = {
                         curses.KEY_UP: curses.KEY_DOWN,
                         curses.KEY_DOWN: curses.KEY_UP,
@@ -199,45 +223,86 @@ class PacmanGame:
                         curses.KEY_RIGHT: curses.KEY_LEFT
                     }.get(g['dir'])
 
-                    if d != reverse_dir:
-                        possible_moves.append((d, ny, nx))
+                    if reverse_dir == curses.KEY_UP: dy = -1
+                    elif reverse_dir == curses.KEY_DOWN: dy = 1
+                    elif reverse_dir == curses.KEY_LEFT: dx = -1
+                    elif reverse_dir == curses.KEY_RIGHT: dx = 1
 
-            if not possible_moves:
-                # If stuck, allow reverse
-                dy, dx = 0, 0
-                reverse_dir = {
-                    curses.KEY_UP: curses.KEY_DOWN,
-                    curses.KEY_DOWN: curses.KEY_UP,
-                    curses.KEY_LEFT: curses.KEY_RIGHT,
-                    curses.KEY_RIGHT: curses.KEY_LEFT
-                }.get(g['dir'])
-
-                if reverse_dir == curses.KEY_UP: dy = -1
-                elif reverse_dir == curses.KEY_DOWN: dy = 1
-                elif reverse_dir == curses.KEY_LEFT: dx = -1
-                elif reverse_dir == curses.KEY_RIGHT: dx = 1
-
-                ny, nx = g['y'] + dy, g['x'] + dx
-                if self.map[ny][nx] != '#':
-                    g['dir'] = reverse_dir
-                    g['y'], g['x'] = ny, nx
-            else:
-                # Simple AI: just pick a random valid move
-                move = random.choice(possible_moves)
-                g['dir'] = move[0]
-                g['y'], g['x'] = move[1], move[2]
+                    ny, nx = g['y'] + dy, g['x'] + dx
+                    if self.map[ny][nx] != '#':
+                        g['dir'] = reverse_dir
+                        g['y'], g['x'] = ny, nx
+                else:
+                    # Simple AI: just pick a random valid move
+                    move = random.choice(possible_moves)
+                    g['dir'] = move[0]
+                    g['y'], g['x'] = move[1], move[2]
 
             # Collision check
             if g['y'] == self.pacman_y and g['x'] == self.pacman_x:
-                self.game_over = True
+                if g['scared']:
+                    self.score += 200
+                    g['y'], g['x'] = g['start_y'], g['start_x']
+                    g['scared'] = False
+                else:
+                    self.handle_death()
+                    break # Break out of ghost loop if handled death
 
-        # Check collision again after all ghosts have moved, to prevent pass-through
+        if not self.game_over:
+            # Check collision again after all ghosts have moved, to prevent pass-through
+            for g in self.ghosts:
+                if g['y'] == self.pacman_y and g['x'] == self.pacman_x:
+                    if g['scared']:
+                        self.score += 200
+                        g['y'], g['x'] = g['start_y'], g['start_x']
+                        g['scared'] = False
+                    else:
+                        self.handle_death()
+                        break
+
+    def reset_positions(self):
+        self.pacman_y, self.pacman_x = self.pacman_start_y, self.pacman_start_x
+        self.pacman_dir = curses.KEY_RIGHT
+        self.next_dir = curses.KEY_RIGHT
         for g in self.ghosts:
-            if g['y'] == self.pacman_y and g['x'] == self.pacman_x:
-                self.game_over = True
+            g['y'], g['x'] = g['start_y'], g['start_x']
+            g['dir'] = curses.KEY_UP
+            g['scared'] = False
+        self.scared_timer = 0
+        # brief pause before resuming
+        self.stdscr.erase()
+        self.draw_map()
+        self.draw_entities()
+        self.stdscr.addstr(self.height, 0, f"Score: {self.score}  Dots left: {self.total_dots}  Lives: {self.lives}", curses.color_pair(2))
+        self.stdscr.addstr(self.height // 2, (self.width * 2 - 5) // 2, "READY", curses.color_pair(3))
+        self.stdscr.refresh()
+        time.sleep(2)
+
+    def handle_death(self):
+        self.lives -= 1
+        if self.lives <= 0:
+            self.game_over = True
+        else:
+            self.reset_positions()
 
     def loop(self):
+        # Initial Ready pause
+        self.stdscr.erase()
+        self.draw_map()
+        self.draw_entities()
+        self.stdscr.addstr(self.height, 0, f"Score: {self.score}  Dots left: {self.total_dots}  Lives: {self.lives}", curses.color_pair(2))
+        self.stdscr.addstr(self.height // 2, (self.width * 2 - 5) // 2, "READY", curses.color_pair(3))
+        self.stdscr.refresh()
+        time.sleep(2)
+
         while self.running:
+            self.frame_count += 1
+            if self.scared_timer > 0:
+                self.scared_timer -= 1
+                if self.scared_timer == 0:
+                    for g in self.ghosts:
+                        g['scared'] = False
+
             # Handle input
             ch = self.stdscr.getch()
             if ch == ord('q'):
@@ -250,9 +315,22 @@ class PacmanGame:
                 msg = "YOU WIN!" if self.win else "GAME OVER!"
                 self.stdscr.addstr(self.height // 2, (self.width * 2 - len(msg)) // 2, msg, curses.color_pair(3))
                 self.stdscr.addstr(self.height // 2 + 1, (self.width * 2 - 20) // 2, f"Score: {self.score}", curses.color_pair(2))
+                self.stdscr.addstr(self.height // 2 + 2, (self.width * 2 - 30) // 2, "Press 'R' to Restart or 'Q' to Quit", curses.color_pair(2))
                 self.stdscr.refresh()
-                time.sleep(3)
+
+                # Wait for user input to restart or quit
+                self.stdscr.nodelay(0) # Blocking input for end screen
+                while True:
+                    ch_end = self.stdscr.getch()
+                    if ch_end in [ord('q'), ord('Q')]:
+                        self.running = False
+                        break
+                    elif ch_end in [ord('r'), ord('R')]:
+                        return True # Return True to indicate restart
                 break
+
+            if ch in [ord('r'), ord('R')]:
+                return True # Restart from middle of game
 
             # Update
             self.move_pacman()
@@ -264,15 +342,18 @@ class PacmanGame:
             self.draw_entities()
 
             # Draw score
-            self.stdscr.addstr(self.height, 0, f"Score: {self.score}  Dots left: {self.total_dots}", curses.color_pair(2))
+            self.stdscr.addstr(self.height, 0, f"Score: {self.score}  Dots left: {self.total_dots}  Lives: {self.lives}", curses.color_pair(2))
 
             self.stdscr.refresh()
 
             # time.sleep is handled by stdscr.timeout()
 
 def main(stdscr):
-    game = PacmanGame(stdscr)
-    game.loop()
+    while True:
+        game = PacmanGame(stdscr)
+        restart = game.loop()
+        if not restart:
+            break
 
 if __name__ == "__main__":
     try:
